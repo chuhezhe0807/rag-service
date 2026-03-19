@@ -1,11 +1,11 @@
 package com.chuhezhe.raguserservice.service;
 
 import com.chuhezhe.common.entity.Result;
+import com.chuhezhe.ragcommonservice.vo.UserVO;
 import com.chuhezhe.raguserservice.dto.UserLoginDTO;
 import com.chuhezhe.raguserservice.dto.UserRegisterDTO;
 import com.chuhezhe.raguserservice.vo.UserLoginVO;
 import com.chuhezhe.raguserservice.vo.UserRegisterVO;
-import com.chuhezhe.raguserservice.vo.UserVO;
 
 public interface IUserService {
 

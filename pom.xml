@@ -11,12 +11,16 @@
     <modules>
         <!-- 公共工具类、常量、异常处理 -->
         <module>rag-common</module>
+        <!-- 公共服务模块 -->
+        <module>rag-common-service</module>
         <!-- 用户管理模块（登录、注册、权限) -->
         <module>rag-user-service</module>
         <!-- API 网关模块（路由、鉴权） -->
         <module>rag-gateway</module>
-        <!-- AI 调用服务 -->
-<!--        <module>rag-ai-service</module>-->
+        <!-- 文档处理模块 -->
+        <module>rag-document-service</module>
+        <!-- 知识库模块 -->
+        <module>rag-knowledge-service</module>
     </modules>
 
     <properties>

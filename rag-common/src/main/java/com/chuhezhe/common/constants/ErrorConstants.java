@@ -24,6 +24,7 @@ public enum ErrorConstants {
     MISSING_REQUEST_HEADER(HttpStatus.BAD_REQUEST, "MissingRequestHeader"),
     USERNAME_ALREADY_EXIST(HttpStatus.BAD_REQUEST, "UsernameAlreadyExist"),
     EMAIL_ALREADY_EXIST(HttpStatus.BAD_REQUEST, "EmailAlreadyExist"),
+    KNOWLEDGE_BASE_NOT_EXIST(HttpStatus.BAD_REQUEST, "KnowledgeBaseNotExist"),
 
     /**
      * 状态码 401

@@ -122,7 +122,7 @@ export function DocumentUploadSteps({
     onDrop,
     accept: {
       "application/pdf": [".pdf"],
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.documentChunk":
         [".docx"],
       "text/plain": [".txt"],
       "text/markdown": [".md"],
@@ -490,7 +490,7 @@ export function DocumentUploadSteps({
                   }
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select a document to preview" />
+                    <SelectValue placeholder="Select a documentChunk to preview" />
                   </SelectTrigger>
                   <SelectContent>
                     {files

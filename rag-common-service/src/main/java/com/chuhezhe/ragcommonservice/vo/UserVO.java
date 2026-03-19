@@ -1,4 +1,4 @@
-package com.chuhezhe.raguserservice.vo;
+package com.chuhezhe.ragcommonservice.vo;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;

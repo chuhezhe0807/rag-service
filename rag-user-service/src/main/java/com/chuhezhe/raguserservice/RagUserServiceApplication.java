@@ -1,6 +1,6 @@
 package com.chuhezhe.raguserservice;
 
-import com.chuhezhe.raguserservice.config.FeignConfiguration;
+import com.chuhezhe.ragcommonservice.config.FeignConfiguration;
 import lombok.extern.slf4j.Slf4j;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
@@ -13,8 +13,8 @@ import org.springframework.core.env.Environment;
 @Slf4j
 @SpringBootApplication
 @EnableDiscoveryClient
-@EnableFeignClients(basePackages = "com.chuhezhe.raguserservice.feign", defaultConfiguration = FeignConfiguration.class)
 @ComponentScan("com.chuhezhe")
+@EnableFeignClients(basePackages = "com.chuhezhe.ragcommonservice.feign")
 @MapperScan("com.chuhezhe.raguserservice.mapper.*")
 public class RagUserServiceApplication {
 

@@ -63,4 +63,11 @@ public class Result<T> {
         result.setCode(HttpStatus.INTERNAL_SERVER_ERROR.value());
         return result;
     }
+
+    /**
+     * 判断是否成功
+     */
+    public boolean isSuccess() {
+        return code == HttpStatus.OK.value();
+    }
 }

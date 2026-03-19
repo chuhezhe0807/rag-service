@@ -11,7 +11,9 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 
-@FeignClient(name = "rag-ai-service")
+// 弃用，改为java实现用户服务
+@Deprecated
+//@FeignClient(name = "rag-ai-service")
 public interface UserServiceClient {
 
     /**

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.chuhezhe.ragdocumentservice.mapper.ProcessingTaskMapper">
+
+    <!-- 定义联表结果映射：ProcessingTask + 嵌套 DocumentUpload -->
+    <resultMap id="TaskWithUploadResultMap" type="com.chuhezhe.ragdocumentservice.vo.ProcessingTaskWithDocumentUploadVO">
+        <!-- 映射 ProcessingTask 字段 -->
+        <id column="id" property="id"/>
+        <result column="knowledge_base_id" property="knowledgeBaseId"/>
+        <result column="document_id" property="documentId"/>
+        <result column="document_upload_id" property="documentUploadId"/>
+        <result column="status" property="status"/>
+        <result column="error_message" property="errorMessage"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+
+        <!-- 嵌套映射 DocumentUpload 对象（一对一关联） -->
+        <association property="documentUpload" javaType="com.chuhezhe.ragdocumentservice.entity.DocumentUpload">
+            <id column="du_id" property="id"/>
+            <result column="du_kb_id" property="knowledgeBaseId"/>
+            <result column="file_name" property="fileName"/>
+            <result column="file_hash" property="fileHash"/>
+            <result column="file_size" property="fileSize"/>
+            <result column="content_type" property="contentType"/>
+            <result column="temp_path" property="tempPath"/>
+            <result column="du_created_at" property="createdAt"/>
+            <result column="du_status" property="status"/>
+            <result column="du_error_msg" property="errorMessage"/>
+        </association>
+    </resultMap>
+
+    <!-- 联表查询SQL：引用上面的resultMap -->
+    <select id="selectTaskWithUploadById" resultMap="TaskWithUploadResultMap">
+        SELECT
+            pt.id, pt.knowledge_base_id, pt.document_id, pt.document_upload_id,
+            pt.status, pt.error_message, pt.created_at, pt.updated_at,
+            du.id AS du_id, du.knowledge_base_id AS du_kb_id, du.file_name,
+            du.file_hash, du.file_size, du.content_type, du.temp_path,
+            du.created_at AS du_created_at, du.status AS du_status, du.error_message AS du_error_msg
+        FROM processing_tasks pt
+                 LEFT JOIN document_uploads du ON pt.document_upload_id = du.id
+        WHERE pt.id = #{taskId}
+    </select>
+</mapper>
