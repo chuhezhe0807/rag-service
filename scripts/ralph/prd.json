@@ -43,8 +43,8 @@
         "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package)"
       ],
       "priority": 3,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": ".env.example 在 US-002 已经铺好 OPENAI_* / DASH_SCOPE_* / OLLAMA_* 占位；本迭代：nacos-config/rag-document-service.yaml 里 api-key 改成 ${OPENAI_API_KEY:}（Spring 占位符），AIConfig 在 bean 初始化时用 StringUtils.hasText 做 fail-fast（抛 IllegalStateException + 清晰提示）。顺手修复 pom.xml 缺 spring-boot-starter-test 导致 `./mvnw -DskipTests package` 在 testCompile 阶段失败的历史坑，否则后续 US-005/006/011 的 PRD build 命令也跑不过。verified: ./mvnw -DskipTests package 退出码 0。"
     },
     {
       "id": "US-004",

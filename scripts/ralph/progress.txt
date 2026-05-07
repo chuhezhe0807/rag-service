@@ -4,6 +4,9 @@
 - app/core/config.py 的 env_file 用 `_SERVICE_ROOT / ".env"` 绝对路径，避免 uvicorn 或测试在任意 cwd 下读不到 .env
 - Settings 字段优先从 os.getenv(...) 取，缺省值作为 pydantic-settings 的 fallback；给字段改默认值时注意两层都要改
 - 本地 .env 是 Settings 的真正来源；nacos-config/*.yaml 是运行时热更新快照，敏感信息（OPENAI_API_KEY 等）只进 .env，不进 Nacos
+- Java 侧敏感配置用 Spring 占位符 `${ENV_VAR:}` 从环境变量注入，nacos-config 里不写明文；bean 创建处再做 `StringUtils.hasText` 校验 + fail-fast
+- Maven 构建顺序：`rag-service`(parent pom) → rag-common → rag-common-service → 业务模块；缺 parent pom 时先 `./mvnw -N -DskipTests install -f pom.xml` 装根 pom
+- `-DskipTests` 只跳过执行不跳过编译；要彻底跳过测试编译用 `-Dmaven.test.skip=true`。业务模块必须显式依赖 spring-boot-starter-test(test scope)，否则 src/test 骨架类连编译都过不了
 
 ---
 
@@ -23,4 +26,26 @@
   - nacos-config/ 被 .gitignore 忽略，是故意的：配置真实源在 Nacos 控制台，不要为了"让 git 看到"去改 .gitignore。提交信息里写明"已发布到 Nacos 控制台 / 本地已备份 yaml"即可
   - pydantic BaseSettings 的 env_file 用相对路径在多 cwd 场景下很脆弱；统一用 `Path(__file__).resolve().parents[N]` 推算服务根目录更稳
   - US-002 的 PRD 验收要求里"`python app/main.py` 可见 rag-ai-service 在 Nacos 服务列表"依赖真实 Nacos 实例；当前迭代只覆盖了静态配置 + Typecheck，活体注册留给 US-012（start-all + check-nacos 脚本）统一验证
+---
+
+## 2026-05-07 - US-003
+- 编辑 nacos-config/rag-document-service.yaml：api-key 从明文 'your-openai-api-key-here' 改成 `${OPENAI_API_KEY:}`，加注释说明必须从环境变量注入
+- 重写 rag-document-service/.../config/AIConfig.java：
+  - `@Value` 改成 `${ai.embedding-model.api-key:}`（缺省空串，不 fail on missing property）
+  - bean 方法内用 `StringUtils.hasText(apiKey)` 校验，空值抛 IllegalStateException，错误消息明确指向 OPENAI_API_KEY / Nacos 覆盖
+- 修补 rag-document-service/pom.xml：补 `spring-boot-starter-test` (test scope)，否则 src/test 下的 ApplicationTests 骨架类连 testCompile 都过不去，`-DskipTests` 只跳过执行不跳过编译
+- rag-ai-service/.env.example 已在 US-002 覆盖 OPENAI_* / DASH_SCOPE_* / OLLAMA_* 占位，本迭代无需再动
+- 质量检查：
+  - `cd rag-common && ./mvnw -q -DskipTests install` 退出 0
+  - `cd rag-common-service && ./mvnw -q -DskipTests install` 退出 0
+  - `cd rag-document-service && ./mvnw -DskipTests package` 退出 0（BUILD SUCCESS，产物 target/rag-document-service-1.0.0.jar）
+- 文件变更：
+  - M nacos-config/rag-document-service.yaml（gitignored，仅本地参考）
+  - M rag-document-service/src/main/java/com/chuhezhe/ragdocumentservice/config/AIConfig.java
+  - M rag-document-service/pom.xml
+- **Learnings for future iterations:**
+  - 首次跑任意 Java 模块 mvnw 之前，必须按顺序装好 parent pom + rag-common + rag-common-service，否则 "Could not find artifact com.chuhezhe:rag-common-service:jar:1.0.0" 或 "rag-service:pom:1.0.0 was not found"。装 parent 用 `./mvnw -N -DskipTests install -f pom.xml`
+  - `-DskipTests` 与 `-Dmaven.test.skip=true` 有区别：前者编译测试但不跑，后者连编译都跳。PRD 用的是前者，所以 src/test 里的类必须能编译通过 → 需要 spring-boot-starter-test 依赖
+  - Spring 占位符 `${VAR:default}` 里冒号后是默认值；`${OPENAI_API_KEY:}` 表示缺省为空串，适合用在"希望从环境变量注入，但允许暂时缺失并在 bean 初始化时统一校验"的场景
+  - Maven 中央仓库偶尔握手失败（"Remote host terminated the handshake"），直接重试一次通常就好，不要改动 settings.xml
 ---
