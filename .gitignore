@@ -60,3 +60,5 @@ frontend/.env
 rag-ai-service/.env
 
 /.dockervolumes/
+
+nacos-config/
