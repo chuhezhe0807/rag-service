@@ -1,8 +1,9 @@
+# 生产环境镜像，同样改用 uv 安装锁定依赖
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# 系统依赖
 RUN apt-get update && apt-get install -y \
   build-essential \
   default-libmysqlclient-dev \
@@ -11,25 +12,26 @@ RUN apt-get update && apt-get install -y \
   curl \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
-COPY requirements.txt .
+# 拷贝 uv 二进制
+COPY --from=ghcr.io/astral-sh/uv:0.4.30 /uv /usr/local/bin/uv
 
-# Install Python packages
-RUN pip install --no-cache-dir -r requirements.txt
+ENV UV_SYSTEM_PYTHON=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
-# Copy entrypoint script first
-COPY entrypoint.sh .
+# 先装依赖（利用 docker 缓存）
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+# 拷贝应用代码
+COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
-
-# Copy application files
 COPY . .
 
-# Create uploads directory
 RUN mkdir -p uploads
 
-# Set Python path and environment
 ENV PYTHONPATH=/app
+ENV PATH="/app/.venv/bin:${PATH}"
 ENV ENVIRONMENT=production
 
-# Run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

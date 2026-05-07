@@ -1,8 +1,9 @@
+# 开发环境镜像，使用 uv 管理依赖（替代原来的 pip + requirements.txt 流程）
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# 系统依赖：编译 mysqlclient/pdfbox 等扩展、健康检查用的 nc/curl
 RUN apt-get update && apt-get install -y \
   build-essential \
   default-libmysqlclient-dev \
@@ -11,27 +12,33 @@ RUN apt-get update && apt-get install -y \
   curl \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
-COPY requirements.txt .
+# 安装 uv（一次性下载预编译二进制，体积小、速度快）
+COPY --from=ghcr.io/astral-sh/uv:0.4.30 /uv /usr/local/bin/uv
 
-# Install Python packages with retry mechanism
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com -r requirements.txt || \
-  (echo "Retrying in 5 seconds..." && sleep 5 && pip install --no-cache-dir -r requirements.txt) || \
-  (echo "Retrying in 10 seconds..." && sleep 10 && pip install --no-cache-dir -r requirements.txt)
+# 让 uv 与系统 Python 同源，避免重复下载解释器
+ENV UV_SYSTEM_PYTHON=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 
-# Copy entrypoint script first
-COPY entrypoint.sh .
+# 先只拷依赖元数据，让 docker layer cache 命中
+COPY pyproject.toml uv.lock ./
+
+# 用 uv.lock 锁定的版本同步依赖到 /app/.venv
+# --frozen 不修改锁文件；--no-install-project 只装依赖、不打包当前项目
+RUN uv sync --frozen --no-install-project
+
+# 后续才拷业务代码，避免源码改动导致依赖层失效
+COPY entrypoint.sh ./
 RUN chmod +x entrypoint.sh
 
-# Copy the rest of the application
 COPY . .
 
-# Create uploads directory
+# 用户文件上传目录
 RUN mkdir -p uploads
 
-# Set Python path and environment
+# 让 uv 创建的虚拟环境进入 PATH，这样直接 alembic / uvicorn 就能用
 ENV PYTHONPATH=/app
+ENV PATH="/app/.venv/bin:${PATH}"
 ENV ENVIRONMENT=development
 
-# Run the application
 ENTRYPOINT ["./entrypoint.sh"]
