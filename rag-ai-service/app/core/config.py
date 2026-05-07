@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from typing import List, Optional
 
 from pydantic_settings import BaseSettings
+
+# 本服务根目录（rag-ai-service/），用来固定定位 .env，避免随 cwd 变化拿不到配置
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -79,9 +83,10 @@ class Settings(BaseSettings):
     )  # Added this line
 
     # nacos
-    NACOS_DATA_ID: str = os.getenv("NACOS_DATA_ID", "rag-gateway.yaml")
+    # Data ID 默认指向本服务自己的配置（rag-ai-service.yaml），不要再误用 rag-gateway.yaml
+    NACOS_DATA_ID: str = os.getenv("NACOS_DATA_ID", "rag-ai-service.yaml")
     NACOS_GROUP: str = os.getenv("NACOS_GROUP", "DEFAULT_GROUP")
-    NACOS_SERVER_ADDR: str = os.getenv("NACOS_SERVER_ADDR", "localhost:8848")
+    NACOS_SERVER_ADDR: str = os.getenv("NACOS_SERVER_ADDR", "127.0.0.1:8848")
     NACOS_ACCESS_KEY: str = os.getenv("NACOS_ACCESS_KEY", "")
     NACOS_SECRET_KEY: str = os.getenv("NACOS_SECRET_KEY", "")
     NACOS_USERNAME: str = os.getenv("NACOS_USERNAME", "nacos")
@@ -89,7 +94,8 @@ class Settings(BaseSettings):
     NACOS_NAMESPACE: str = os.getenv("NACOS_NAMESPACE", "")
 
     class Config:
-        env_file = "../.env" # 目录结构改变后，配置文件访问路径需要修改
+        # 用绝对路径锁定 rag-ai-service/.env，避免 cwd 不一致导致读不到配置
+        env_file = str(_SERVICE_ROOT / ".env")
 
 
 settings = Settings()

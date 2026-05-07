@@ -29,8 +29,8 @@
         "Build/Typecheck passes (python -c \"from app.core.config import settings; assert settings.NACOS_DATA_ID == 'rag-ai-service.yaml'\")"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "nacos-config/ 在 .gitignore 中被整目录忽略（配置入 Nacos 后仅作本地参考），故 rag-ai-service.yaml 未进 git；config.py 同步把 NACOS_SERVER_ADDR 默认值从 localhost:8848 改为 127.0.0.1:8848，env_file 用 _SERVICE_ROOT 绝对路径锁定，避免 cwd 漂移导致读不到 .env。verified: uv run python -c 断言 NACOS_DATA_ID=='rag-ai-service.yaml' 退出码 0。"
     },
     {
       "id": "US-003",

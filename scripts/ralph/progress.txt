@@ -1,0 +1,26 @@
+## Codebase Patterns
+- nacos-config/ 整目录在 .gitignore（第 64 行）中被忽略；配置以 Nacos 控制台为真实源，仓库里的 yaml 仅作参考/同步用，不要期望 git 追踪
+- rag-ai-service 用 uv 管理依赖（见 pyproject.toml / uv.lock），跑脚本用 `uv run python ...`；requirements.txt 保留作为 Docker 兼容，由 `uv export` 生成
+- app/core/config.py 的 env_file 用 `_SERVICE_ROOT / ".env"` 绝对路径，避免 uvicorn 或测试在任意 cwd 下读不到 .env
+- Settings 字段优先从 os.getenv(...) 取，缺省值作为 pydantic-settings 的 fallback；给字段改默认值时注意两层都要改
+- 本地 .env 是 Settings 的真正来源；nacos-config/*.yaml 是运行时热更新快照，敏感信息（OPENAI_API_KEY 等）只进 .env，不进 Nacos
+
+---
+
+## 2026-05-07 - US-002
+- 新建 nacos-config/rag-ai-service.yaml（server.port=8000 + mysql/minio/chromadb/document 各段，127.0.0.1 本机直连，文件被 .gitignore 忽略，仅作参考）
+- 编辑 rag-ai-service/app/core/config.py：
+  - NACOS_DATA_ID 默认值 'rag-gateway.yaml' → 'rag-ai-service.yaml'
+  - NACOS_SERVER_ADDR 默认值 'localhost:8848' → '127.0.0.1:8848'
+  - env_file 改用 `_SERVICE_ROOT / ".env"` 绝对路径锁定 rag-ai-service/.env
+- 新建 rag-ai-service/.env.example：覆盖 MYSQL_*、CHROMA_DB_*、MINIO_*、NACOS_* 五项，并预留 US-003 的 LLM/Embedding 变量占位
+- 质量检查：`uv run python -c "from app.core.config import settings; assert settings.NACOS_DATA_ID == 'rag-ai-service.yaml'"` 退出码 0
+- 文件变更：
+  - A nacos-config/rag-ai-service.yaml（gitignored，本地参考）
+  - M rag-ai-service/app/core/config.py
+  - A rag-ai-service/.env.example
+- **Learnings for future iterations:**
+  - nacos-config/ 被 .gitignore 忽略，是故意的：配置真实源在 Nacos 控制台，不要为了"让 git 看到"去改 .gitignore。提交信息里写明"已发布到 Nacos 控制台 / 本地已备份 yaml"即可
+  - pydantic BaseSettings 的 env_file 用相对路径在多 cwd 场景下很脆弱；统一用 `Path(__file__).resolve().parents[N]` 推算服务根目录更稳
+  - US-002 的 PRD 验收要求里"`python app/main.py` 可见 rag-ai-service 在 Nacos 服务列表"依赖真实 Nacos 实例；当前迭代只覆盖了静态配置 + Typecheck，活体注册留给 US-012（start-all + check-nacos 脚本）统一验证
+---
