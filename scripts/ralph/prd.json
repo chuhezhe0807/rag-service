@@ -1,0 +1,215 @@
+{
+  "project": "rag-service",
+  "branchName": "ralph/microservice-fix",
+  "description": "Fix the post-microservice-split RAG project so the full pipeline (register → login → KB → upload → process → chat with citations) runs end-to-end across the Java services (user/document/knowledge/gateway on Spring Cloud + Nacos) and the Python rag-ai-service (FastAPI). Infrastructure (MySQL/Nacos/ChromaDB/MinIO) is already up via docker compose.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add missing Python deps to rag-ai-service/requirements.txt",
+      "description": "As a developer, I want rag-ai-service to install cleanly so the FastAPI process can import all modules at startup.",
+      "acceptanceCriteria": [
+        "rag-ai-service/requirements.txt contains: loguru, pydantic-settings, nacos-sdk-python (>=2.0.0, the v2.nacos API), httpx, pyyaml",
+        "In a clean venv: `pip install -r rag-ai-service/requirements.txt` succeeds",
+        "From rag-ai-service/: `python -c \"import app.main\"` exits 0 with no ImportError",
+        "Build/Typecheck passes (python -c \"import app.main\" returns 0)"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Add rag-ai-service Nacos config and local env defaults",
+      "description": "As an operator, I want rag-ai-service to load its own Nacos config and run locally against host-mapped infra so it stops reading rag-gateway.yaml by mistake.",
+      "acceptanceCriteria": [
+        "Create nacos-config/rag-ai-service.yaml with at least: server.port=8000, mysql (host=127.0.0.1, port=3306, db=ragwebui, user=ragwebui, password=ragwebui), minio (endpoint=127.0.0.1:9000, access/secret=minioadmin, bucket=documents), chromadb (host=127.0.0.1, port=8001)",
+        "Update rag-ai-service/app/core/config.py default NACOS_DATA_ID from 'rag-gateway.yaml' to 'rag-ai-service.yaml'",
+        "Add rag-ai-service/.env.example with MYSQL_SERVER=127.0.0.1, CHROMA_DB_HOST=127.0.0.1, CHROMA_DB_PORT=8001, MINIO_ENDPOINT=127.0.0.1:9000, NACOS_SERVER_ADDR=127.0.0.1:8848",
+        "Manual verification step in commit message: `python app/main.py` starts and `rag-ai-service` is visible in Nacos http://127.0.0.1:8848/nacos service list",
+        "Build/Typecheck passes (python -c \"from app.core.config import settings; assert settings.NACOS_DATA_ID == 'rag-ai-service.yaml'\")"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Wire LLM/Embedding API keys on Python and Java sides",
+      "description": "As an operator, I want valid embedding/LLM credentials on both sides so the document pipeline and chat actually call the model.",
+      "acceptanceCriteria": [
+        "rag-ai-service/.env.example documents OPENAI_API_KEY (and optional OPENAI_API_BASE / OPENAI_MODEL / OPENAI_EMBEDDINGS_MODEL / DASH_SCOPE_API_KEY / OLLAMA_API_BASE)",
+        "nacos-config/rag-document-service.yaml replaces 'your-openai-api-key-here' with a config placeholder pulled from environment variable (e.g. ${OPENAI_API_KEY:}) so secrets are not committed literally",
+        "rag-document-service/src/main/java/com/chuhezhe/ragdocumentservice/config/AIConfig.java fails fast with a clear error message when api-key is blank, instead of silently constructing a broken bean",
+        "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package)"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Initialize ragwebui database tables from a single source of truth",
+      "description": "As a developer, I want a deterministic way to create all 7 application tables so Java services do not crash on startup waiting for Python alembic.",
+      "acceptanceCriteria": [
+        "Document the chosen approach in scripts/ralph/progress.txt: either (a) startup-order: rag-ai-service must boot first to run alembic upgrade head, or (b) extract DDL into .dockervolumes/mysql/sql/01_schema.sql so MySQL initializes the schema on first boot",
+        "If approach (b) is chosen: produce 01_schema.sql covering users, knowledge_bases, documents, document_uploads, processing_tasks, document_chunks, api_keys, chats, chat_knowledge_bases — generated from the alembic head schema",
+        "Manual verification step in commit message: `docker exec rag-service-db-1 mysql -uroot -proot -e \"show tables from ragwebui\"` lists all 9 tables",
+        "Build/Typecheck passes (sql file parses with `mysql --help` style sanity check, or `python -c \"import alembic\"` for approach (a))"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Fix KBClient feign path mismatch (404 on /api/ai/documents/process)",
+      "description": "As the document service, I want my call to rag-knowledge-service to hit the real controller path so document processing can read knowledge-base info.",
+      "acceptanceCriteria": [
+        "Edit rag-document-service/src/main/java/com/chuhezhe/ragdocumentservice/feign/KBClient.java",
+        "Change @GetMapping(\"/{kb_id}\") to @GetMapping(\"/knowledge-base/{kb_id}\") to match KnowledgeBaseController.@RequestMapping(\"/knowledge-base\")",
+        "Manual verification step in commit message: POST /api/ai/documents/process returns 200/202 (no longer 404 from KBClient)",
+        "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package)"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Reconcile /api/ai/documents/upload/record endpoint with KB upload flow",
+      "description": "As the knowledge service, I want my Feign call for upload records to hit a real endpoint so PUT /knowledge-base/{id}/documents/upload does not 404 mid-flow.",
+      "acceptanceCriteria": [
+        "Pick option A or B and document the choice in commit body",
+        "Option A: rag-document-service/.../controller/DocumentController.java adds @PostMapping(\"/upload/record\") that delegates to documentUploadService.addUploadRecord and returns Result<Integer>",
+        "Option B: rag-knowledge-service/.../service/KnowledgeBaseService.uploadKnowledgeBaseDocuments stops calling addUploadDocumentRecord and relies solely on /api/ai/documents/upload (which already creates the upload record); also remove the now-dead method from rag-knowledge-service/.../feign/DocumentServiceClient.java",
+        "Manual verification: PUT /knowledge-base/{kb_id}/documents/upload returns success and SELECT * FROM document_uploads shows a new row",
+        "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package && cd ../rag-knowledge-service && ./mvnw -DskipTests package)"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Remove duplicate KB CRUD/upload/process from rag-ai-service (Python)",
+      "description": "As the architect, I want only Java rag-knowledge-service / rag-document-service to own KB CRUD and document ingestion so the Python side is solely responsible for retrieval, chat, openapi, api-keys.",
+      "acceptanceCriteria": [
+        "Delete from rag-ai-service/app/api/api_v1/knowledge_base.py: POST '', GET '', GET '/{kb_id}', PUT '/{kb_id}', DELETE '/{kb_id}', POST '/{kb_id}/documents/upload', POST '/{kb_id}/documents/preview', POST '/{kb_id}/documents/process', GET '/{kb_id}/documents/tasks', GET '/{kb_id}/documents/{doc_id}', POST '/cleanup'",
+        "Keep POST '/test-retrieval' and any internal helper used by chat",
+        "Edit nacos-config/rag-gateway.yaml: remove route 'rag-ai-service-knowledge-base' (Path=/api/ai/knowledge-base/**); leave the Java route '/knowledge-base/**' as the single KB entrypoint",
+        "Manual verification: GET /api/ai/knowledge-base via gateway returns 404; GET /knowledge-base via gateway returns the user's KB list",
+        "Build/Typecheck passes (python -c \"from app.api.api_v1 import knowledge_base\" succeeds; python -c \"from app.api.api_v1.knowledge_base import router; assert all(r.path != '/' for r in router.routes if r.methods == {'GET'})\")"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Align Python ORM and Java MyBatis entity column types",
+      "description": "As a developer, I want consistent column types across both sides so writes do not overflow and reads do not fail deserialization.",
+      "acceptanceCriteria": [
+        "Audit 7 tables: users, knowledge_bases, documents, document_uploads, processing_tasks, document_chunks, api_keys",
+        "Confirm/fix documents.file_size as BIGINT to match Java Document.fileSize (BigInteger); update rag-ai-service/app/models/knowledge.py and add an alembic migration if a column type change is needed",
+        "Produce scripts/ralph/check_schema.sql: a script that SELECTs information_schema.COLUMNS for those 7 tables and prints column_name + data_type + is_nullable",
+        "Add scripts/ralph/expected_schema.md: a table per entity comparing Python ORM column, Java @TableField, and MySQL actual",
+        "Manual verification: running `mysql -uroot -proot ragwebui < scripts/ralph/check_schema.sql` matches expected_schema.md with zero diffs",
+        "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package && python -c \"from app.models.knowledge import Document\")"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Wire JWT propagation: Gateway → Java services → Feign",
+      "description": "As an authenticated user, I want my token to flow through gateway and downstream feign calls so protected endpoints see my identity.",
+      "acceptanceCriteria": [
+        "Verify rag-common-service/.../config/WebMvcConfig.java registers AuthInterceptor via addInterceptors and excludes /api/ai/auth/** + any @AnonymousAccess paths",
+        "rag-common-service/.../config/FeignConfiguration.java provides a feign.RequestInterceptor bean that copies the X-Token / Authorization header from the inbound request (RequestContextHolder) to the outbound feign request",
+        "Add a GlobalFilter to rag-gateway: validate JWT presence (skip /api/ai/auth/**), reject with 401 + Result.error if missing/invalid, otherwise let the request pass with the original header intact",
+        "Manual verification: `curl -H 'X-Token: <valid>' :8080/knowledge-base` returns 200 with the caller's KBs; `curl :8080/knowledge-base` returns 401",
+        "Build/Typecheck passes (cd rag-common-service && ./mvnw -DskipTests package && cd ../rag-gateway && ./mvnw -DskipTests package)"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Align embedding model between Java writer and Python reader",
+      "description": "As an operator, I want a single embedding model serving both Java doc-processing writes and Python retrieval reads so vector dimensions match and retrieval recalls correctly.",
+      "acceptanceCriteria": [
+        "Pick option A or B and document the choice in commit body",
+        "Option A: rag-document-service introduces an EmbeddingFactory mirroring Python EmbeddingsFactory (openai/dashscope/ollama), reading provider+model from nacos-config/rag-document-service.yaml; Java config keys must match Python settings keys",
+        "Option B: Java stops calling vectorStore.add(); after writing chunks to MySQL it issues a synchronous HTTP POST to rag-ai-service /internal/embed-and-index with {kb_id, chunks[]}; Python receives, embeds, writes to ChromaDB collection kb_{kb_id}",
+        "Either way: provider+model is configured in exactly one place per environment",
+        "Manual verification: after processing a document via Java, POST /api/ai/knowledge-base/test-retrieval (Python) with a query from that document returns at least one hit with score > 0.5",
+        "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package && python -c \"from app.services.embedding.embedding_factory import EmbeddingsFactory\")"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Build all Java modules in dependency order via mvnw",
+      "description": "As a developer, I want every Java module to compile and package locally so I can run them without a system mvn install.",
+      "acceptanceCriteria": [
+        "Run in order from rag-service/: (cd rag-common && ./mvnw clean install -DskipTests) && (cd rag-common-service && ./mvnw clean install -DskipTests) && (cd rag-user-service && ./mvnw clean package -DskipTests) && (cd rag-document-service && ./mvnw clean package -DskipTests) && (cd rag-knowledge-service && ./mvnw clean package -DskipTests) && (cd rag-gateway && ./mvnw clean package -DskipTests)",
+        "Each business module produces a runnable Spring Boot fat jar in <module>/target/*.jar",
+        "Add scripts/ralph/build-java.sh that runs the chained command above and exits non-zero on any failure",
+        "Build/Typecheck passes (bash scripts/ralph/build-java.sh exits 0)"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Validate startup order and Nacos service registration",
+      "description": "As an operator, I want a single command/checklist to bring up the whole stack and verify all services registered with Nacos before any client traffic.",
+      "acceptanceCriteria": [
+        "Add scripts/ralph/start-all.sh that: (1) verifies docker compose -f docker-compose.dev.yml ps shows nacos/db/chromadb/minio healthy; (2) starts rag-ai-service in background (uvicorn on 8000); (3) starts each Java service in background using java -jar <module>/target/*.jar; (4) waits for each port to accept connections",
+        "Add scripts/ralph/check-nacos.sh that calls Nacos open API GET /nacos/v1/ns/instance/list?serviceName=<name> for rag-ai-service, rag-user-service, rag-knowledge-service, rag-document-service, rag-gateway, and prints a green ✓ for each healthy instance",
+        "Manual verification: bash scripts/ralph/check-nacos.sh prints 5 ✓; curl http://127.0.0.1:8080/api/ai/auth/info returns the gateway-routed user-service response (200 with token, 401 without)",
+        "Build/Typecheck passes (bash -n scripts/ralph/start-all.sh && bash -n scripts/ralph/check-nacos.sh)"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "End-to-end RAG smoke test through gateway:8080",
+      "description": "As a tester, I want a single script to walk the full pipeline so I can prove the whole RAG flow is working post-microservice-split.",
+      "acceptanceCriteria": [
+        "Add scripts/ralph/e2e-smoke.sh that, against http://127.0.0.1:8080, performs: (1) POST /api/ai/auth/register a fresh user; (2) POST /api/ai/auth/token to capture token; (3) POST /knowledge-base to create a KB and capture kb_id; (4) PUT /knowledge-base/{kb_id}/documents/upload with a sample .md or .txt under fixtures/ to capture upload_id; (5) POST /api/ai/documents/process with the upload_id to capture task_id; (6) poll GET /api/ai/documents/process/{task_id} until status=COMPLETED (timeout 120s); (7) POST /api/ai/chat/... with a question grounded in the document and assert the response references the source",
+        "Script exits 0 only when all 7 steps return success",
+        "Add fixtures/sample.md with a few paragraphs of distinctive text so the chat answer can be checked",
+        "Manual verification: bash scripts/ralph/e2e-smoke.sh exits 0 against a freshly started stack",
+        "Build/Typecheck passes (bash -n scripts/ralph/e2e-smoke.sh)"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Align frontend API paths to the new gateway",
+      "description": "As a frontend user, I want the Next.js app to talk to the new gateway so the UI flow (login → KB → upload → chat) works in the browser.",
+      "acceptanceCriteria": [
+        "frontend/.env or frontend/.env.development sets NEXT_PUBLIC_API_URL=http://127.0.0.1:8080 (or http://127.0.0.1.nip.io if keeping nginx)",
+        "Audit all fetch/axios calls in frontend/: KB calls go to /knowledge-base/** (the Java route), not /api/ai/knowledge-base/**",
+        "Auth header name used by the frontend matches Java GConstants.JWT_TOKEN_HEADER (X-Token); update frontend interceptor/axios default header accordingly",
+        "File upload uses multipart field name 'file' to match Java DocumentController @RequestParam(\"file\") on PUT /knowledge-base/{kb_id}/documents/upload",
+        "Manual verification: in a browser at http://localhost:3000 — register, login, create KB, upload a file, ask a question, see answer with citations",
+        "Verify in browser using dev-browser skill",
+        "Build/Typecheck passes (cd frontend && npm run build OR npx tsc --noEmit)"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
