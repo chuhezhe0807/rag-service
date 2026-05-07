@@ -49,5 +49,5 @@ spring:
 
 logging:
   level:
-    com.chuhezhe.raguserservice.feign: DEBUG
+    com.chuhezhe.ragknowledgeservice.feign: DEBUG
     feign: DEBUG

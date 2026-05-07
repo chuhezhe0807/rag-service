@@ -2,6 +2,32 @@ spring:
   application:
     name: rag-user-service
 
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/ragwebui?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: ragwebui
+    password: ragwebui
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    type: com.alibaba.druid.pool.DruidDataSource
+    druid:
+      initial-size: 5
+      min-idle: 5
+      max-active: 20
+      max-wait: 60000
+      filter:
+        stat:
+          slow-sql-millis: 1000
+          log-slow-sql: true
+        wall:
+          config:
+            drop-table-allow: false
+
+  mybatis-plus:
+    mapper-locations:
+      - classpath:mapper/**/*.xml
+    configuration:
+      mapUnderscoreToCamelCase: true
+      log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
   cloud:
     nacos:
       username: nacos
