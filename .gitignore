@@ -60,5 +60,15 @@ frontend/.env
 rag-ai-service/.env
 
 /.dockervolumes/
+# 例外：mysql init 脚本是版本化资产（US-004 的 01_schema.sql 等），需要入库
+!/.dockervolumes/
+!/.dockervolumes/mysql/
+!/.dockervolumes/mysql/sql/
+!/.dockervolumes/mysql/sql/**
+# 其他子目录（data/、nacos/、minio/ 等运行时数据）仍然忽略
+/.dockervolumes/mysql/data/
+/.dockervolumes/nacos/
+/.dockervolumes/minio/
+/.chromadb/
 
 nacos-config/

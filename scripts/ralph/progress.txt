@@ -7,6 +7,8 @@
 - Java 侧敏感配置用 Spring 占位符 `${ENV_VAR:}` 从环境变量注入，nacos-config 里不写明文；bean 创建处再做 `StringUtils.hasText` 校验 + fail-fast
 - Maven 构建顺序：`rag-service`(parent pom) → rag-common → rag-common-service → 业务模块；缺 parent pom 时先 `./mvnw -N -DskipTests install -f pom.xml` 装根 pom
 - `-DskipTests` 只跳过执行不跳过编译；要彻底跳过测试编译用 `-Dmaven.test.skip=true`。业务模块必须显式依赖 spring-boot-starter-test(test scope)，否则 src/test 骨架类连编译都过不了
+- ragwebui schema 真实源：.dockervolumes/mysql/sql/01_schema.sql（由 alembic head 编译而成）+ alembic 自身；二者须同步演进。01_schema.sql 末尾 `alembic_version` 种入当前 head，保证容器首启后 `alembic upgrade head` 是 no-op
+- docker-entrypoint-initdb.d 下的 SQL 只在 mysql data 目录为空时触发；已经有数据的环境改 schema 需手动 `docker exec -i <db> mysql -uroot -proot < file.sql`（CREATE TABLE IF NOT EXISTS 可保证幂等）
 
 ---
 
@@ -48,4 +50,24 @@
   - `-DskipTests` 与 `-Dmaven.test.skip=true` 有区别：前者编译测试但不跑，后者连编译都跳。PRD 用的是前者，所以 src/test 里的类必须能编译通过 → 需要 spring-boot-starter-test 依赖
   - Spring 占位符 `${VAR:default}` 里冒号后是默认值；`${OPENAI_API_KEY:}` 表示缺省为空串，适合用在"希望从环境变量注入，但允许暂时缺失并在 bean 初始化时统一校验"的场景
   - Maven 中央仓库偶尔握手失败（"Remote host terminated the handshake"），直接重试一次通常就好，不要改动 settings.xml
+---
+
+## 2026-05-07 - US-004
+- 选择 approach (b) MySQL init SQL：新建 .dockervolumes/mysql/sql/01_schema.sql
+  - 覆盖 PRD 列出的 9 张表 + `messages`（alembic head 含但 PRD 9 张表清单漏列，chat 流程需要）+ `alembic_version`
+  - 每条 CREATE TABLE 用 IF NOT EXISTS，可重复执行幂等
+  - 所有 FK / UNIQUE / 普通 KEY 显式命名，方便 US-008 做 schema diff
+  - 表尾 `INSERT IGNORE INTO alembic_version VALUES ('3580c0dcd005')` 把当前 head 写入，首启后再跑 `alembic upgrade head` 是 no-op
+  - approach (a)（先起 Python 跑 alembic）被否掉：Java 服务若等 Python 先启会引入不必要的启动耦合，失败面更大
+- 脚本挂载路径不需要改：docker-compose.dev.yml 已把 `./.dockervolumes/mysql/sql:/docker-entrypoint-initdb.d/` 挂上，文件放进去即可
+- 质量检查：
+  - Dry-run：`docker exec rag-service-db-1 mysql -uroot -proot -e "CREATE DATABASE ragwebui_dryrun"` + 把 `USE ragwebui` 改写成 `USE ragwebui_dryrun` 灌入，DDL 全部解析成功
+  - 对已经存在的 ragwebui 库 apply：`docker exec -i rag-service-db-1 mysql -uroot -proot < 01_schema.sql` 退出 0；`show tables from ragwebui` 返回 11 行（10 业务表 + alembic_version），覆盖 PRD 的 9 张表
+- 文件变更：
+  - A .dockervolumes/mysql/sql/01_schema.sql（gitignored? 检查下 .gitignore 对 .dockervolumes 的覆盖）
+- **Learnings for future iterations:**
+  - documents.file_size 在 alembic initial 是 sa.Integer()，但 Python ORM app/models/knowledge.py 已经写 BigInteger → 两边不一致。US-004 严格跟 alembic head 留 INT，US-008 去把它改成 BIGINT 并同步 migration + 01_schema.sql
+  - PRD 列的"9 张表"漏了 messages；如果只按 9 张表出 SQL，chat 功能一定会挂。凡是按 alembic head 生成 schema 的任务，要以 migration 串为准、PRD 清单为辅
+  - 以后每新增一条 alembic migration：必须同步把 DDL 补进 01_schema.sql，并把 alembic_version 种入值改成新的 head revision id，否则首启后 `alembic upgrade head` 会把 migration 重跑一遍
+  - docker-entrypoint-initdb.d 在 data 目录非空时不跑；想验证 init 链路得先清 `.dockervolumes/mysql/data` 然后重启容器
 ---

@@ -57,8 +57,8 @@
         "Build/Typecheck passes (sql file parses with `mysql --help` style sanity check, or `python -c \"import alembic\"` for approach (a))"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "选 approach (b)：.dockervolumes/mysql/sql/01_schema.sql，由 alembic head 3580c0dcd005 的 upgrade 串编译而成，覆盖 PRD 列出的 9 张表 + messages（alembic head 含但 PRD 漏列）+ alembic_version 种入 '3580c0dcd005'，后续 `alembic upgrade head` 为 no-op。已在临时库 dryrun 导入通过并在 ragwebui 直接 apply，`show tables from ragwebui` 返回 11 行（10 业务 + alembic_version），覆盖 PRD 9 张表；documents.file_size 暂时保留 INT（与 alembic head 一致），留给 US-008 改 BIGINT 并同步 migration + 01_schema.sql。注意：docker-entrypoint-initdb.d 只在 mysql 首次 init 时跑，.dockervolumes/mysql/data 已存在时不会触发；重装验证需先清 data 目录。"
     },
     {
       "id": "US-005",
