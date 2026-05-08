@@ -148,8 +148,8 @@
         "Build/Typecheck passes (cd rag-document-service && ./mvnw -DskipTests package && python -c \"from app.services.embedding.embedding_factory import EmbeddingsFactory\")"
       ],
       "priority": 10,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "选 Option B：Python 单点持有 embedding 栈。Python 新增 app/api/internal/embed.py 暴露 POST /internal/embed-and-index（挂在主 app 的 /internal prefix 下，网关未配 route、不对外）；接 {kb_id, chunks:[{id,content,metadata}]}，用 EmbeddingsFactory + VectorStoreFactory 写到 ChromaDB `kb_{kb_id}`。Java 侧：新增 RagAiServiceClient FeignClient（name=rag-ai-service，走 Nacos）+ EmbedAndIndexRequest / EmbedAndIndexResponse DTO；DocumentProcessorService 把原先 `vectorStore.add(aiDocList)` 改成 `ragAiServiceClient.embedAndIndex(...)`，chunk id 用之前已经生成的 UUID，metadata 与 Python ChunkMetadata 字段对齐（source/kb_id/document_id/chunk_id + loader metadata putIfAbsent）。同步清理：删 AIConfig.java；pom 去掉 spring-ai-starter-vector-store-chroma + spring-ai-starter-model-openai；bootstrap.yml 去掉 spring.ai.vectorstore.chroma；nacos-config/rag-document-service.yaml 去掉 ai.embedding-model.api-key；DocumentProcessorService 清掉 unused import（VectorStore、org.springframework.ai.document.Document、Collectors）。verified: `cd rag-document-service && ./mvnw -DskipTests package` 退出 0；`uv run python -c 'from app.services.embedding.embedding_factory import EmbeddingsFactory; import app.main; from app.api.internal.embed import router'` 退出 0，router.routes 仅含 POST /embed-and-index；写-读同一 collection `kb_{kb_id}`。活体 test-retrieval score>0.5 校验留给 US-013。"
     },
     {
       "id": "US-011",

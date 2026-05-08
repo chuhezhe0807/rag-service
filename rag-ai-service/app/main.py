@@ -5,6 +5,7 @@ import uvicorn
 from loguru import logger
 
 from app.api.api_v1.api import api_router
+from app.api.internal import router as internal_router
 from app.api.openapi.api import router as openapi_router
 from app.core.config import settings
 from app.core.minio import init_minio
@@ -52,6 +53,9 @@ app = FastAPI(
 # Include routers
 app.include_router(api_router, prefix=settings.API_V1_STR)
 app.include_router(openapi_router, prefix="/openapi")
+# /internal/** 只给同集群服务（主要是 rag-document-service）直连；rag-gateway
+# 的 route 列表里没有 /internal 前缀，外部打不到
+app.include_router(internal_router, prefix="/internal")
 
 @app.get("/")
 def root():

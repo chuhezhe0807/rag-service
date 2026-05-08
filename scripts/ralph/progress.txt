@@ -17,6 +17,9 @@
 - JWT 路径分工：网关只做"存在性校验 + 原样透传"（JwtAuthGlobalFilter，order=-100，白名单 /api/ai/auth/**），业务服务 AuthInterceptor 才做"解析 + 查用户"。别在网关里做完整校验——网关不该依赖 UserServiceClient，两处做会产生两个真相源
 - rag-gateway 是 reactive(WebFlux)，**不要**引 rag-common-service（Spring MVC）会 auto-config 冲突；只引 rag-common 拿 Result / GConstants / ErrorConstants 即可
 - 服务间 Feign 透传 header 用 `com.chuhezhe.ragcommonservice.config.FeignConfiguration#authHeaderRelayRequestInterceptor`，从 `RequestContextHolder` 取 ServletRequestAttributes，null 时（非 web 线程）静默跳过
+- embedding / 向量库职责：Python rag-ai-service 独占，Java 通过 Feign 打 `POST /internal/embed-and-index` 委托。`provider + model + api-key` 只在 Python 一份（settings.EMBEDDINGS_PROVIDER + 对应 *_API_KEY / *_MODEL），Java 不再引 spring-ai starter、不读 ai.embedding-model.* 配置
+- Chroma collection 命名统一为 `kb_{kb_id}`：Python 的 VectorStoreFactory / test-retrieval 用这个前缀，Java 委托写入的时候也把 kb_id 传给 Python、由 Python 写同名 collection，避免写单 collection `RagCollection`、读 `kb_{kb_id}` 的老坑
+- `/internal/**` 路由：rag-ai-service 内部调用空间；main.py 独立挂一个 internal_router，rag-gateway 不配对应 route，所以外部网络打不进来，但 Nacos 集群内的 Java 服务走服务发现可直连
 
 ---
 
@@ -245,4 +248,76 @@
   - 完整 Feign 透传 + 网关拦截的活体校验要等 US-012 start-all.sh 把完整
     stack 起来后、US-013 e2e-smoke.sh 跑过再算数；当前 US-009 只保证编译
     和逻辑自洽
+---
+
+## 2026-05-08 - US-010
+- 选 Option B 而非 Option A：
+  - Option A 让 Java 自己做 embedding，必须在 rag-document-service 维护一份
+    provider 工厂（openai/dashscope/ollama），且 spring-ai 对 dashscope 没有
+    一等支持，实现体量大；两份配置长期只会越漂越远
+  - Option B 让 Python 做唯一的 embedding+入库入口，Java 只剩一个 Feign 调
+    用；虽然多一跳 HTTP，但 provider/model/api-key 只剩 Python 一份
+- 代码改动：
+  - Python 端新增 rag-ai-service/app/api/internal/{__init__.py, embed.py}，
+    定义 POST /embed-and-index，接 {kb_id, chunks:[{id,content,metadata}]}，
+    用 EmbeddingsFactory + VectorStoreFactory 写 ChromaDB `kb_{kb_id}`；
+    空 chunk 列表直接返回 indexed=0；异常包成 500 Result
+  - Python main.py 加 `app.include_router(internal_router, prefix="/internal")`，
+    网关路由列表里不配 `/internal` → 外部网络打不到；Nacos 集群内服务走服务
+    发现直连
+  - Java 端：
+    - 新增 feign/RagAiServiceClient.java（@FeignClient(name="rag-ai-service")，
+      POST /internal/embed-and-index），走服务发现，不写死 URL
+    - 新增 dto/EmbedAndIndexRequest.java（含 Chunk 内部类）、vo/
+      EmbedAndIndexResponse.java，字段名与 Python Pydantic 模型一致
+    - DocumentProcessorService：把 `vectorStore.add(aiDocList)` 替换成
+      `ragAiServiceClient.embedAndIndex(...)`；chunk id 复用 step 5 已经
+      生成的 UUID，metadata 用 LinkedHashMap 保序拼出 source/kb_id/
+      document_id/chunk_id + loader metadata（putIfAbsent 不覆盖核心字段）
+    - 清理：删 config/AIConfig.java；pom 去掉
+      spring-ai-starter-vector-store-chroma + spring-ai-starter-model-openai
+      (US-003 的 fail-fast 校验随 AIConfig 一起走，但改动范围已被 US-010
+      覆盖)；bootstrap.yml 去掉整个 spring.ai.vectorstore 段；
+      nacos-config/rag-document-service.yaml 去掉 ai.embedding-model.api-key
+      只留 server.port + 注释
+    - DocumentProcessorService 清掉 unused import：
+      `org.springframework.ai.vectorstore.VectorStore`、
+      `org.springframework.ai.document.Document`、`java.util.stream.Collectors`
+- 质量检查：
+  - `cd rag-document-service && ./mvnw -DskipTests package` 退出 0
+  - `uv run python -c "import app.main; from app.api.internal.embed import \
+    router, EmbedAndIndexRequest, EmbedAndIndexResponse; from app.services.\
+    embedding.embedding_factory import EmbeddingsFactory"` 退出 0
+  - router.routes 仅含 POST /embed-and-index
+- 文件变更：
+  - A rag-ai-service/app/api/internal/__init__.py
+  - A rag-ai-service/app/api/internal/embed.py
+  - M rag-ai-service/app/main.py
+  - A rag-document-service/.../feign/RagAiServiceClient.java
+  - A rag-document-service/.../dto/EmbedAndIndexRequest.java
+  - A rag-document-service/.../vo/EmbedAndIndexResponse.java
+  - M rag-document-service/.../service/DocumentProcessorService.java
+  - D rag-document-service/.../config/AIConfig.java
+  - M rag-document-service/pom.xml
+  - M rag-document-service/src/main/resources/bootstrap.yml
+  - M nacos-config/rag-document-service.yaml（gitignored）
+- **Learnings for future iterations:**
+  - 跨语言写-读同一个 Chroma collection 时，写端和读端必须共用 provider +
+    model（向量维度要一致）；Option B 把"我们该用什么 embedding"压缩到一个
+    进程的配置里，是最稳的做法
+  - Java 的 `Map<String, Object> metadata` 送到 Python 时要保顺序（用
+    LinkedHashMap），否则 Jackson 序列化+Python 反序列化后 dict 的 key 顺序
+    会乱；虽然 Python 不依赖顺序，但调试时一个固定顺序更好读
+  - loader 自带 metadata 往 map 里合并用 `putIfAbsent`，避免覆盖我们手工塞
+    进去的 source/kb_id/document_id/chunk_id 这些核心字段
+  - 删 spring-ai starter 的时候也要把 bootstrap.yml 的 `spring.ai.vectorstore`
+    段一起删掉，否则启动时 Spring Boot 会报 "Unknown property" 或者 nacos
+    刷新配置时打一堆 warning
+  - Python `app.include_router(..., prefix="/internal")` 之后，如果网关 route
+    列表没有 `/internal/**`，外部请求会 404，这正是我们想要的"只给内部集群
+    用"的效果；不需要再加身份校验
+  - US-003 给 AIConfig 加的 fail-fast（api-key 空抛 IllegalStateException）
+    在 US-010 里随 AIConfig 整个删除而失效，这是刻意的：Java 不再需要 api-key，
+    Python 那边的 EmbeddingsFactory 在 create() 时会读 settings，缺失则由
+    Python 自己抛；不要在 Java 这边重造一份失效的 fail-fast
 ---

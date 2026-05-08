@@ -47,17 +47,9 @@ spring:
             group: DEFAULT_GROUP
             refresh: false
 
-  ai:
-    vectorstore:
-      type: chroma
-      chroma:
-        initialize-schema: false
-        collectionName: "RagCollection"
-        client:
-          url: http://127.0.0.1:8001
-          port: 8001
-          host: http://127.0.0.1
-
+  # US-010 Option B：原先在这里配的 spring.ai.vectorstore.chroma 已经移除——
+  # 向量化 + ChromaDB 写入都由 rag-ai-service 负责，Java 通过 Feign 打
+  # /internal/embed-and-index 委托即可，无需持有 chroma 连接
 
 logging:
   level:

@@ -52,19 +52,8 @@
             <version>8.5.5</version>
         </dependency>
 
-        <!--    向量数据库    -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-vector-store-chroma</artifactId>
-            <version>1.0.0</version>
-        </dependency>
-
-        <!--     模型 - OpenAI    -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-openai</artifactId>
-            <version>1.0.0</version>
-        </dependency>
+        <!-- US-010 Option B：embedding + vector store 全部交给 Python rag-ai-service，
+             Java 不再需要 spring-ai 的 chroma / openai starter，也不再持有 provider+model 配置 -->
 
         <!-- Nacos Discovery -->
         <dependency>

@@ -10,7 +10,9 @@ import com.chuhezhe.ragdocumentservice.entity.Document;
 import com.chuhezhe.ragdocumentservice.entity.DocumentChunk;
 import com.chuhezhe.ragdocumentservice.entity.DocumentUpload;
 import com.chuhezhe.ragdocumentservice.entity.ProcessingTask;
+import com.chuhezhe.ragdocumentservice.dto.EmbedAndIndexRequest;
 import com.chuhezhe.ragdocumentservice.feign.KBClient;
+import com.chuhezhe.ragdocumentservice.feign.RagAiServiceClient;
 import com.chuhezhe.ragdocumentservice.loader.FileLoader;
 import com.chuhezhe.ragdocumentservice.loader.impl.DocxLoader;
 import com.chuhezhe.ragdocumentservice.loader.impl.MarkdownLoader;
@@ -20,12 +22,12 @@ import com.chuhezhe.ragdocumentservice.mapper.ProcessingTaskMapper;
 import com.chuhezhe.ragdocumentservice.textsplitter.TextSplitter;
 import com.chuhezhe.ragdocumentservice.textsplitter.impl.RecursiveCharacterTextSplitter;
 import com.chuhezhe.ragdocumentservice.util.MinIOClient;
+import com.chuhezhe.ragdocumentservice.vo.EmbedAndIndexResponse;
 import com.chuhezhe.ragdocumentservice.vo.ProcessingTaskWithDocumentUploadVO;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FilenameUtils;
-import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.FileCopyUtils;
@@ -37,7 +39,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -55,12 +56,16 @@ public class DocumentProcessorService extends ServiceImpl<ProcessingTaskMapper, 
 
     private final MinIOClient minIOClient;
 
-    private final VectorStore vectorStore;
-
     /**
      * 知识库客户端
      */
     private final KBClient kbClient;
+
+    /**
+     * US-010 Option B：把"做 embedding + 写向量库"这步委托给 rag-ai-service，
+     * 保证 provider+model 在整个系统里只有 Python 这一份配置
+     */
+    private final RagAiServiceClient ragAiServiceClient;
 
     @PostConstruct // 会在bean初始化完成后调用
     public void init() {
@@ -218,9 +223,10 @@ public class DocumentProcessorService extends ServiceImpl<ProcessingTaskMapper, 
                 documentService.getBaseMapper().insert(document);
                 log.info("Task {}: Document record created successfully", taskId);
 
-                // 5. 存储文档块
+                // 5. 存储文档块（MySQL）并并行记录要发给 Python 做 embedding 的副本
                 log.info("Task {}: Storing document chunks", taskId);
                 List<DocumentChunk> documentChunkList = new ArrayList<>();
+                List<EmbedAndIndexRequest.Chunk> aiChunks = new ArrayList<>(documentChunks.size());
                 for (int i = 0; i < documentChunks.size(); i++) {
                     FileLoader.DocumentChunk chunk = documentChunks.get(i);
 
@@ -246,6 +252,22 @@ public class DocumentProcessorService extends ServiceImpl<ProcessingTaskMapper, 
 
                     documentChunkList.add(documentChunk);
 
+                    // 用 LinkedHashMap 保留顺序，字段名与 Python ChunkMetadata 对齐
+                    Map<String, Object> metadata = new LinkedHashMap<>();
+                    metadata.put("source", fileName);
+                    metadata.put("kb_id", task.getKnowledgeBaseId());
+                    metadata.put("document_id", document.getId());
+                    metadata.put("chunk_id", chunkId);
+                    if (chunk.metadata() != null) {
+                        // loader 自带的 metadata（比如 page_number）原样合并，但不要覆盖上面几个核心字段
+                        chunk.metadata().forEach(metadata::putIfAbsent);
+                    }
+                    aiChunks.add(EmbedAndIndexRequest.Chunk.builder()
+                            .id(chunkId)
+                            .content(chunk.pageContent())
+                            .metadata(metadata)
+                            .build());
+
                     if (i > 0 && i % 100 == 0) {
                         documentChunkService.saveBatch(documentChunkList, 100);
                         log.info("Task {}: Stored {} chunks", taskId, 100);
@@ -259,17 +281,19 @@ public class DocumentProcessorService extends ServiceImpl<ProcessingTaskMapper, 
                 }
                 log.info("Task {}: All document chunks stored successfully", taskId);
 
-                // 6. 添加到向量存储
-                log.info("Task {}: Adding chunks to vector store", taskId);
-                List<org.springframework.ai.document.Document> aiDocList = documentChunks.stream()
-                        .map(chunk -> org.springframework.ai.document.Document.builder()
-                                .text(chunk.pageContent())
-                                .metadata(chunk.metadata())
+                // 6. 通过 rag-ai-service 做 embedding 并写 ChromaDB collection kb_{kb_id}
+                //    US-010 Option B：Java 不再自己持有 embedding provider / vector store 配置
+                log.info("Task {}: Delegating {} chunks to rag-ai-service /internal/embed-and-index", taskId, aiChunks.size());
+                EmbedAndIndexResponse embedResp = ragAiServiceClient.embedAndIndex(
+                        EmbedAndIndexRequest.builder()
+                                .kbId(task.getKnowledgeBaseId())
+                                .chunks(aiChunks)
                                 .build()
-                        )
-                        .collect(Collectors.toList());
-                vectorStore.add(aiDocList);
-                log.info("Task {}: Chunks added to vector store", taskId);
+                );
+                log.info("Task {}: rag-ai-service indexed {} chunks into {}",
+                        taskId,
+                        embedResp != null ? embedResp.getIndexed() : null,
+                        embedResp != null ? embedResp.getCollection() : null);
 
                 // 7. 更新任务状态
                 task.setStatus(ProcessingTask.STATUS_COMPLETED);
